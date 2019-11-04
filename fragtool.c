@@ -12,22 +12,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sqlite3.h>
+#include "db.h"
+#include "fragment.h"
 #include "mapfile.h"
+#include "pcode.h"
 #include "version.h"
 
 sqlite3 *db;
-
-struct fragment_s {
-	uint32_t ep1;		// j xxxx
-	uint32_t ep2;		// nop
-	uint32_t magic1;	// "FRAG"
-	uint32_t magic2;	// "MENT"
-	uint32_t code_offset;
-	uint32_t reloc_offset;
-	uint32_t romsize;
-	uint32_t memsize;
-	char data[];
-} __attribute__(( packed ));
 
 char *cmd_mkdb(int argc, char **argv);
 char *cmd_scan(int argc, char **argv);
@@ -98,299 +89,6 @@ void print_usage()
 	fprintf(stderr, "\nReport bugs to " URL_STRING "\n");
 }
 
-int DB_Init(char *filename) {
-	int rc = SQLITE_OK;
-	rc = sqlite3_open(filename, &db);
-	if (rc != SQLITE_OK) return rc;
-
-	rc = sqlite3_exec(db,
-		"CREATE TABLE IF NOT EXISTS frags(pcode text, addr int, num int, ep int, code int, reloc int, size int, memsize int, segment int);",
-		NULL, NULL, NULL
-	);
-	if (rc != SQLITE_OK) return rc;
-	return SQLITE_OK;
-}
-
-int DB_Close() {
-	int rc = SQLITE_OK;
-	rc = sqlite3_close(db);
-	return rc;
-}
-
-int DB_Begin() {
-	return sqlite3_exec(db, "BEGIN;", NULL, NULL, NULL);
-}
-
-int DB_End() {
-	return sqlite3_exec(db, "END;", NULL, NULL, NULL);
-}
-
-int DB_AddFrag(
-	char *pcode,
-	int64_t addr,
-	int64_t num,
-	int64_t ep,
-	int64_t code,
-	int64_t reloc,
-	int64_t size,
-	int64_t memsize,
-	int64_t segment
-) {
-	__label__ err_prepare, err_bind, err_step;
-	int rc = SQLITE_OK;
-	char *zErr = NULL;
-	sqlite3_stmt *stmt;
-
-	rc = sqlite3_prepare_v2(
-		db,
-		R"STATEMENT(
-			insert
-			into frags(
-				pcode,
-				addr,
-				num,
-				ep,
-				code,
-				reloc,
-				size,
-				memsize,
-				segment
-			)
-			values(
-				:pcode,
-				:addr,
-				:num,
-				:ep,
-				:code,
-				:reloc,
-				:size,
-				:memsize,
-				:segment
-			);
-		)STATEMENT",
-		-1,
-		&stmt,
-		NULL
-	);
-	if (rc != SQLITE_OK) goto err_prepare;
-
-	rc = sqlite3_bind_text(stmt, 1, pcode, -1, SQLITE_TRANSIENT);
-	if (rc != SQLITE_OK) goto err_bind;
-
-	rc = sqlite3_bind_int64(stmt, 2, addr);
-	if (rc != SQLITE_OK) goto err_bind;
-	
-	rc = sqlite3_bind_int64(stmt, 3, num);
-	if (rc != SQLITE_OK) goto err_bind;
-
-	rc = sqlite3_bind_int64(stmt, 4, ep);
-	if (rc != SQLITE_OK) goto err_bind;
-
-	rc = sqlite3_bind_int64(stmt, 5, code);
-	if (rc != SQLITE_OK) goto err_bind;
-
-	rc = sqlite3_bind_int64(stmt, 6, reloc);
-	if (rc != SQLITE_OK) goto err_bind;
-
-	rc = sqlite3_bind_int64(stmt, 7, size);
-	if (rc != SQLITE_OK) goto err_bind;
-
-	rc = sqlite3_bind_int64(stmt, 8, memsize);
-	if (rc != SQLITE_OK) goto err_bind;
-
-	rc = sqlite3_bind_int64(stmt, 9, segment);
-	if (rc != SQLITE_OK) goto err_bind;
-
-	rc = sqlite3_step(stmt);
-	if (rc != SQLITE_DONE) goto err_step;
-
-	sqlite3_finalize(stmt);
-	return SQLITE_OK;
-
-err_step:
-	if (!zErr) zErr = "error in step";
-err_bind:
-	if (!zErr) zErr = "error in bind";
-	sqlite3_finalize(stmt);
-err_prepare:
-	if (!zErr) zErr = "error in prepare";
-
-	if (!zErr) fprintf(stderr, "DB_AddFrag: %s\n", zErr);
-	return rc;
-}
-
-int DB_GetSizeForNum(int num)
-{
-	__label__ out_finalize;
-	char *zErr = NULL;
-	int rc = SQLITE_OK;
-	int addr = -1;
-
-	sqlite3_stmt *stmt;
-
-	rc = sqlite3_prepare_v2(
-		db,
-		R"STATEMENT(
-			select size from frags where num==:num limit 1;
-		)STATEMENT",
-		-1,
-		&stmt,
-		NULL
-	);
-	if (rc != SQLITE_OK) {
-		zErr = "error in prepare";
-		goto out_finalize;
-	}
-
-	rc = sqlite3_bind_int(stmt, 1, num);
-	if (rc != SQLITE_OK) {
-		zErr = "error in bind";
-		goto out_finalize;
-	}
-
-	rc = sqlite3_step(stmt);
-	switch(rc) {
-	case SQLITE_DONE:
-		addr = -1;
-		break;
-	case SQLITE_ROW:
-		addr = sqlite3_column_int(stmt, 0);
-		break;
-	default:
-		zErr = "error in step";
-		break;
-	}
-
-out_finalize:
-	if (zErr) fprintf(stderr, "DB_GetSizeForNum: %s\n", zErr);
-	rc = sqlite3_finalize(stmt);
-	if (rc != SQLITE_OK) fprintf(stderr,
-		"DB_GetSizeForNum: error in finalize\n");
-	return addr;
-}
-
-int DB_GetAddrForNum(int num)
-{
-	__label__ out_finalize;
-	char *zErr = NULL;
-	int rc = SQLITE_OK;
-	int addr = -1;
-
-	sqlite3_stmt *stmt;
-
-	rc = sqlite3_prepare_v2(
-		db,
-		R"STATEMENT(
-			select addr from frags where num==:num limit 1;
-		)STATEMENT",
-		-1,
-		&stmt,
-		NULL
-	);
-	if (rc != SQLITE_OK) {
-		zErr = "error in prepare";
-		goto out_finalize;
-	}
-
-	rc = sqlite3_bind_int(stmt, 1, num);
-	if (rc != SQLITE_OK) {
-		zErr = "error in bind";
-		goto out_finalize;
-	}
-
-	rc = sqlite3_step(stmt);
-	switch(rc) {
-	case SQLITE_DONE:
-		addr = -1;
-		break;
-	case SQLITE_ROW:
-		addr = sqlite3_column_int(stmt, 0);
-		break;
-	default:
-		zErr = "error in step";
-		break;
-	}
-
-out_finalize:
-	if (zErr) fprintf(stderr, "DB_GetAddrForNum: %s\n", zErr);
-	rc = sqlite3_finalize(stmt);
-	if (rc != SQLITE_OK) fprintf(stderr,
-		"DB_GetAddrForNum: error in finalize\n");
-	return addr;
-}
-
-char *get_pcode(char pcode[6], uint8_t *rom)
-{
-	__label__ out;
-	if (!rom or !pcode) goto out;
-	pcode[0] = rom[0x3b];
-	pcode[1] = rom[0x3c];
-	pcode[2] = rom[0x3d];
-	pcode[3] = rom[0x3e];
-	pcode[4] = rom[0x3f] + '0';
-	pcode[5] = '\0';
-	for (int i=0; i < 4; i++) {
-		if (!isalnum(pcode[i]))
-			pcode[i] = '_';
-		else
-			pcode[i] = tolower(pcode[i]);
-	}
-
-	if (!isdigit(pcode[4]))
-		pcode[4] = '_';
-
-out:
-	return pcode;
-}
-
-int32_t get_frag_num(struct fragment_s *frag)
-{
-	uint32_t ep1 = ntohl(frag->ep1);
-	unsigned opcode = (ep1 & 0xfc000000) >> (32-6);
-	uint32_t address = (ep1 & 0x03ffffff) << 2;
-	if (opcode != 2) return -1;
-	int fragnum = ((address >> 20) & 0xff) - 0x10;
-	return fragnum;
-}
-
-uint32_t get_vma(struct fragment_s *frag)
-{
-	uint32_t ep1, address, vma;
-	ep1 = ntohl(frag->ep1);
-	address = (ep1 & 0x03ffffff) << 2;
-	address |= 0x80000000;
-	vma = address & 0xFFF00000;
-	return vma;
-}
-
-uint32_t get_ep_offset(struct fragment_s *frag)
-{
-	uint32_t ep1 = ntohl(frag->ep1);
-	uint32_t address = (ep1 & 0x03ffffff) << 2;
-	address &= 0x000fffff;
-	return address;
-}
-
-uint32_t get_ep(struct fragment_s *frag)
-{
-	uint32_t ep1 = ntohl(frag->ep1);
-	uint32_t address = (ep1 & 0x03ffffff) << 2;
-	address |= 0x80000000;
-	return address;
-}
-
-uint32_t get_segment(struct fragment_s *frag)
-{
-	return get_ep(frag) & 0xFFF00000;
-}
-
-bool isfrag(struct fragment_s *frag)
-{
-	if (ntohl(frag->magic1) != 0x46524147) return false;
-	if (ntohl(frag->magic2) != 0x4d454e54) return false;
-	return true;
-}
-
 void parse_relocs(uint8_t *fragbytes)
 {
 	struct fragment_s frag;
@@ -457,34 +155,6 @@ void parse_relocs(uint8_t *fragbytes)
 			loc_fragnum
 		);
 	}
-}
-
-int DB_FragSearch(uint8_t *data, ssize_t size)
-{
-	int rc = SQLITE_OK;
-	char pcode[6] = {0};
-	get_pcode(pcode, data);
-	DB_Begin();
-	for (ssize_t i = 0; i < (size - 15); i += 16) {
-		struct fragment_s *frag = (struct fragment_s *)(data + i);
-		if (!isfrag(frag)) continue;
-		rc = DB_AddFrag(
-			pcode,
-			i,
-			get_frag_num(frag),
-			get_ep(frag),
-			ntohl(frag->code_offset),
-			ntohl(frag->reloc_offset),
-			ntohl(frag->romsize),
-			ntohl(frag->memsize),
-			get_segment(frag)
-		);
-		if (rc != SQLITE_OK) {
-			break;
-		}
-	}
-	DB_End();
-	return rc;
 }
 
 int dump_frags()
@@ -560,7 +230,7 @@ char *cmd_scan(int argc, char **argv)
 		goto out_return;
 	}
 
-	rc = DB_Init(":memory:");
+	rc = DB_Init(&db, ":memory:");
 	if (rc != SQLITE_OK) {
 		msg = "DB_Init oopsed";
 		goto out_return;
@@ -577,7 +247,7 @@ char *cmd_scan(int argc, char **argv)
 		goto out_unmap;
 	}
 
-	rc = DB_FragSearch(m.data, m.size);
+	rc = DB_FragSearch(db, m.data, m.size);
 	if (rc != SQLITE_OK) {
 		msg = "DB_FragSearch oopsed";
 		goto out_unmap;
@@ -588,7 +258,7 @@ char *cmd_scan(int argc, char **argv)
 out_unmap:
 	MappedFile_Close(m);
 out_dbclose:
-	DB_Close();
+	DB_Close(db);
 out_return:
 	if (msg) {
 		return msg;
@@ -617,7 +287,7 @@ char *cmd_mkdb(int argc, char **argv)
 		break;
 	}
 
-	rc = DB_Init(argv[3]);
+	rc = DB_Init(&db, argv[3]);
 	if (rc != SQLITE_OK) {
 		msg = "DB_Init oopsed";
 		goto out_return;
@@ -634,7 +304,7 @@ char *cmd_mkdb(int argc, char **argv)
 		goto out_unmap;
 	}
 
-	rc = DB_FragSearch(m.data, m.size);
+	rc = DB_FragSearch(db, m.data, m.size);
 	if (rc != SQLITE_OK) {
 		msg = "DB_FragSearch oopsed";
 		goto out_unmap;
@@ -645,7 +315,7 @@ char *cmd_mkdb(int argc, char **argv)
 out_unmap:
 	MappedFile_Close(m);
 out_dbclose:
-	DB_Close();
+	DB_Close(db);
 out_return:
 	if (msg) {
 		return msg;
@@ -677,7 +347,7 @@ char *cmd_decompile(int argc, char **argv)
 		break;
 	}
 
-	rc = DB_Init(":memory:");
+	rc = DB_Init(&db, ":memory:");
 	if (rc != SQLITE_OK) {
 		msg = "DB_Init oopsed";
 		goto out_return;
@@ -694,15 +364,15 @@ char *cmd_decompile(int argc, char **argv)
 		goto out_unmap;
 	}
 
-	rc = DB_FragSearch(m.data, m.size);
+	rc = DB_FragSearch(db, m.data, m.size);
 	if (rc != SQLITE_OK) {
 		msg = "DB_FragSearch oopsed";
 		goto out_unmap;
 	}
 
 	fragnum = atoi(argv[3]);
-	fragaddr = DB_GetAddrForNum(fragnum);
-	fragsize = DB_GetSizeForNum(fragnum);
+	fragaddr = DB_GetAddrForNum(db, fragnum);
+	fragsize = DB_GetSizeForNum(db, fragnum);
 	if (fragaddr == -1) {
 		msg = "no fragment by that number";
 		goto out_unmap;
@@ -735,7 +405,7 @@ char *cmd_decompile(int argc, char **argv)
 out_unmap:
 	MappedFile_Close(m);
 out_dbclose:
-	DB_Close();
+	DB_Close(db);
 out_return:
 	if (msg) {
 		return msg;
@@ -769,7 +439,7 @@ char *cmd_relocs(int argc, char **argv)
 		break;
 	}
 
-	rc = DB_Init(":memory:");
+	rc = DB_Init(&db, ":memory:");
 	if (rc != SQLITE_OK) {
 		msg = "DB_Init oopsed";
 		goto out_return;
@@ -786,13 +456,13 @@ char *cmd_relocs(int argc, char **argv)
 		goto out_unmap;
 	}
 
-	rc = DB_FragSearch(m.data, m.size);
+	rc = DB_FragSearch(db, m.data, m.size);
 	if (rc != SQLITE_OK) {
 		msg = "DB_FragSearch oopsed";
 		goto out_unmap;
 	}
 
-	int fragaddr = DB_GetAddrForNum(atoi(argv[3]));
+	int fragaddr = DB_GetAddrForNum(db, atoi(argv[3]));
 	if (fragaddr == -1) {
 		msg = "no fragment by that number";
 		goto out_unmap;
@@ -802,7 +472,7 @@ char *cmd_relocs(int argc, char **argv)
 out_unmap:
 	MappedFile_Close(m);
 out_dbclose:
-	DB_Close();
+	DB_Close(db);
 out_return:
 	if (msg) {
 		return msg;
