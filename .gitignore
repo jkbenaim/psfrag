@@ -2,3 +2,5 @@ fragtool
 *.o
 *.swp
 *~
+*.db
+*.bin
