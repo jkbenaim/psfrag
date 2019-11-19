@@ -95,7 +95,7 @@ void parse_relocs(uint8_t *fragbytes)
 	memcpy(&frag, fragbytes, sizeof(struct fragment_s));
 	uint32_t *words = (uint32_t *)fragbytes;
 	uint32_t *reloc_words = words;
-	reloc_words += htonl(frag.reloc_offset) / sizeof(uint32_t);
+	reloc_words += htonl(frag.offset_relocs) / sizeof(uint32_t);
 	uint32_t num_relocs = htonl(reloc_words[0]);
 	reloc_words++;
 	printf("%d relocations\n", num_relocs);
@@ -129,7 +129,7 @@ void parse_relocs(uint8_t *fragbytes)
 			zType = "addiu";
 			loc = (target & 0x0000FFFF);
 			if (!foreign)
-				loc += get_segment(&frag);
+				loc += get_vma(&frag);
 			break;
 		default:
 			zType = "unknown";
@@ -372,7 +372,7 @@ char *cmd_decompile(int argc, char **argv)
 
 	fragnum = atoi(argv[3]);
 	fragaddr = DB_GetAddrForNum(db, fragnum);
-	fragsize = DB_GetSizeForNum(db, fragnum);
+	fragsize = DB_GetRomSizeForNum(db, fragnum);
 	if (fragaddr == -1) {
 		msg = "no fragment by that number";
 		goto out_unmap;

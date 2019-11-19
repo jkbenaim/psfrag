@@ -14,14 +14,14 @@ int DB_AddFrag(
 	char *pcode,
 	int64_t addr,
 	int64_t num,
-	int64_t ep,
-	int64_t code,
-	int64_t reloc,
-	int64_t size,
-	int64_t memsize,
-	int64_t segment
+	int64_t entrypoint,
+	int64_t offset_code,
+	int64_t offset_relocs,
+	int64_t romsize,
+	int64_t ramsize,
+	int64_t vma
 );
-int DB_GetSizeForNum(sqlite3 *db, int num);
+int DB_GetRomSizeForNum(sqlite3 *db, int num);
 int DB_GetAddrForNum(sqlite3 *db, int num);
 int DB_FragSearch(sqlite3 *db, uint8_t *data, ssize_t size);
 #endif

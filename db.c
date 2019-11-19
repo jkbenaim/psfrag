@@ -9,7 +9,7 @@ int DB_Init(sqlite3 **db, char *filename) {
 	if (rc != SQLITE_OK) return rc;
 
 	rc = sqlite3_exec(*db,
-		"CREATE TABLE IF NOT EXISTS frags(pcode text, addr int, num int, ep int, code int, reloc int, size int, memsize int, segment int);",
+		"CREATE TABLE IF NOT EXISTS frags(pcode text, addr int, num int, entrypoint int, offset_code int, offset_reloc int, romsize int, ramsize int, vma int);",
 		NULL, NULL, NULL
 	);
 	if (rc != SQLITE_OK) return rc;
@@ -35,12 +35,12 @@ int DB_AddFrag(
 	char *pcode,
 	int64_t addr,
 	int64_t num,
-	int64_t ep,
-	int64_t code,
-	int64_t reloc,
-	int64_t size,
-	int64_t memsize,
-	int64_t segment
+	int64_t entrypoint,
+	int64_t offset_code,
+	int64_t offset_relocs,
+	int64_t romsize,
+	int64_t ramsize,
+	int64_t vma
 ) {
 	__label__ err_prepare, err_bind, err_step;
 	int rc = SQLITE_OK;
@@ -55,23 +55,23 @@ int DB_AddFrag(
 				pcode,
 				addr,
 				num,
-				ep,
-				code,
-				reloc,
-				size,
-				memsize,
-				segment
+				entrypoint,
+				offset_code,
+				offset_reloc,
+				romsize,
+				ramsize,
+				vma
 			)
 			values(
 				:pcode,
 				:addr,
 				:num,
-				:ep,
-				:code,
-				:reloc,
-				:size,
-				:memsize,
-				:segment
+				:entrypoint,
+				:offset_code,
+				:offset_reloc,
+				:romsize,
+				:ramsize,
+				:vma
 			);
 		)STATEMENT",
 		-1,
@@ -89,22 +89,22 @@ int DB_AddFrag(
 	rc = sqlite3_bind_int64(stmt, 3, num);
 	if (rc != SQLITE_OK) goto err_bind;
 
-	rc = sqlite3_bind_int64(stmt, 4, ep);
+	rc = sqlite3_bind_int64(stmt, 4, entrypoint);
 	if (rc != SQLITE_OK) goto err_bind;
 
-	rc = sqlite3_bind_int64(stmt, 5, code);
+	rc = sqlite3_bind_int64(stmt, 5, offset_code);
 	if (rc != SQLITE_OK) goto err_bind;
 
-	rc = sqlite3_bind_int64(stmt, 6, reloc);
+	rc = sqlite3_bind_int64(stmt, 6, offset_relocs);
 	if (rc != SQLITE_OK) goto err_bind;
 
-	rc = sqlite3_bind_int64(stmt, 7, size);
+	rc = sqlite3_bind_int64(stmt, 7, romsize);
 	if (rc != SQLITE_OK) goto err_bind;
 
-	rc = sqlite3_bind_int64(stmt, 8, memsize);
+	rc = sqlite3_bind_int64(stmt, 8, ramsize);
 	if (rc != SQLITE_OK) goto err_bind;
 
-	rc = sqlite3_bind_int64(stmt, 9, segment);
+	rc = sqlite3_bind_int64(stmt, 9, vma);
 	if (rc != SQLITE_OK) goto err_bind;
 
 	rc = sqlite3_step(stmt);
@@ -125,7 +125,7 @@ err_prepare:
 	return rc;
 }
 
-int DB_GetSizeForNum(sqlite3 *db, int num)
+int DB_GetRomSizeForNum(sqlite3 *db, int num)
 {
 	__label__ out_finalize;
 	char *zErr = NULL;
@@ -137,7 +137,7 @@ int DB_GetSizeForNum(sqlite3 *db, int num)
 	rc = sqlite3_prepare_v2(
 		db,
 		R"STATEMENT(
-			select size from frags where num==:num limit 1;
+			select romsize from frags where num==:num limit 1;
 		)STATEMENT",
 		-1,
 		&stmt,
@@ -168,10 +168,10 @@ int DB_GetSizeForNum(sqlite3 *db, int num)
 	}
 
 out_finalize:
-	if (zErr) fprintf(stderr, "DB_GetSizeForNum: %s\n", zErr);
+	if (zErr) fprintf(stderr, "DB_GetRomSizeForNum: %s\n", zErr);
 	rc = sqlite3_finalize(stmt);
 	if (rc != SQLITE_OK) fprintf(stderr,
-		"DB_GetSizeForNum: error in finalize\n");
+		"DB_GetRomSizeForNum: error in finalize\n");
 	return addr;
 }
 
@@ -239,12 +239,12 @@ int DB_FragSearch(sqlite3 *db, uint8_t *data, ssize_t size)
 			pcode,
 			i,
 			get_frag_num(frag),
-			get_ep(frag),
-			ntohl(frag->code_offset),
-			ntohl(frag->reloc_offset),
+			get_entrypoint(frag),
+			ntohl(frag->offset_code),
+			ntohl(frag->offset_relocs),
 			ntohl(frag->romsize),
-			ntohl(frag->memsize),
-			get_segment(frag)
+			ntohl(frag->ramsize),
+			get_vma(frag)
 		);
 		if (rc != SQLITE_OK) {
 			break;
