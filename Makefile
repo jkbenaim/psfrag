@@ -3,7 +3,7 @@ objects := $(patsubst %.c,%.o,$(wildcard *.c))
 
 libs:=sqlite3
 
-EXTRAS += -fsanitize=undefined -fsanitize=null -fcf-protection=full -fstack-protector-all -fstack-check -Wall
+#EXTRAS += -fsanitize=undefined -fsanitize=null -fcf-protection=full -fstack-protector-all -fstack-check -Wall
 
 ifdef libs
 LDFLAGS += $(shell pkg-config --libs   ${libs})

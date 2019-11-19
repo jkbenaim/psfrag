@@ -46,7 +46,6 @@ int DB_AddFrag(
 	int rc = SQLITE_OK;
 	char *zErr = NULL;
 	sqlite3_stmt *stmt;
-	printf("prep\n");
 
 	rc = sqlite3_prepare_v2(
 		db,
