@@ -166,7 +166,7 @@ int dump_frags()
 	sqlite3_stmt *stmt;
 	rc = sqlite3_prepare_v2(
 		db,
-		"select pcode,addr,num,ep,code,reloc,size,memsize,segment from frags order by num;",
+		"select pcode,addr,num,entrypoint,offset_code,offset_relocs,romsize,ramsize,vma from frags order by num;",
 		-1,
 		&stmt,
 		NULL

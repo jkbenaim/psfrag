@@ -9,7 +9,7 @@ int DB_Init(sqlite3 **db, char *filename) {
 	if (rc != SQLITE_OK) return rc;
 
 	rc = sqlite3_exec(*db,
-		"CREATE TABLE IF NOT EXISTS frags(pcode text, addr int, num int, entrypoint int, offset_code int, offset_reloc int, romsize int, ramsize int, vma int);",
+		"CREATE TABLE IF NOT EXISTS frags(pcode text, addr int, num int, entrypoint int, offset_code int, offset_relocs int, romsize int, ramsize int, vma int);",
 		NULL, NULL, NULL
 	);
 	if (rc != SQLITE_OK) return rc;
@@ -46,6 +46,7 @@ int DB_AddFrag(
 	int rc = SQLITE_OK;
 	char *zErr = NULL;
 	sqlite3_stmt *stmt;
+	printf("prep\n");
 
 	rc = sqlite3_prepare_v2(
 		db,
@@ -57,7 +58,7 @@ int DB_AddFrag(
 				num,
 				entrypoint,
 				offset_code,
-				offset_reloc,
+				offset_relocs,
 				romsize,
 				ramsize,
 				vma
@@ -68,7 +69,7 @@ int DB_AddFrag(
 				:num,
 				:entrypoint,
 				:offset_code,
-				:offset_reloc,
+				:offset_relocs,
 				:romsize,
 				:ramsize,
 				:vma
