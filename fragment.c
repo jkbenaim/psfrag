@@ -1,4 +1,9 @@
+#ifdef __MINGW32__
+#include <winsock.h>
+#else
+#define _GNU_SOURCE
 #include <arpa/inet.h>
+#endif
 #include "fragment.h"
 int32_t get_frag_num(struct fragment_s *frag)
 {

@@ -1,4 +1,9 @@
+#ifdef __MINGW32__
+#include <winsock.h>
+#else
+#define _GNU_SOURCE
 #include <arpa/inet.h>
+#endif
 #include <ctype.h>
 #include "db.h"
 #include "fragment.h"
@@ -130,7 +135,7 @@ int DB_GetRomSizeForNum(sqlite3 *db, int num)
 	__label__ out_finalize;
 	char *zErr = NULL;
 	int rc = SQLITE_OK;
-	int addr = -1;
+	int size = -1;
 
 	sqlite3_stmt *stmt;
 
@@ -157,10 +162,10 @@ int DB_GetRomSizeForNum(sqlite3 *db, int num)
 	rc = sqlite3_step(stmt);
 	switch(rc) {
 	case SQLITE_DONE:
-		addr = -1;
+		size = -1;
 		break;
 	case SQLITE_ROW:
-		addr = sqlite3_column_int(stmt, 0);
+		size = sqlite3_column_int(stmt, 0);
 		break;
 	default:
 		zErr = "error in step";
@@ -172,7 +177,7 @@ out_finalize:
 	rc = sqlite3_finalize(stmt);
 	if (rc != SQLITE_OK) fprintf(stderr,
 		"DB_GetRomSizeForNum: error in finalize\n");
-	return addr;
+	return size;
 }
 
 int DB_GetAddrForNum(sqlite3 *db, int num)
