@@ -90,7 +90,7 @@ int DB_AddFrag(
 
 	rc = sqlite3_bind_int64(stmt, 2, addr);
 	if (rc != SQLITE_OK) goto err_bind;
-	
+
 	rc = sqlite3_bind_int64(stmt, 3, num);
 	if (rc != SQLITE_OK) goto err_bind;
 

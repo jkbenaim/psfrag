@@ -22,7 +22,7 @@ sqlite3 *db;
 
 char *cmd_mkdb(int argc, char **argv);
 char *cmd_scan(int argc, char **argv);
-char *cmd_relocs(int argc, char **argv);
+char *cmd_depends(int argc, char **argv);
 char *cmd_decompile(int argc, char **argv);
 char *cmd_extract(int argc, char **argv);
 char *cmd_extract_all(int argc, char **argv);
@@ -39,10 +39,10 @@ struct cmd_s {
 		.handler = cmd_scan,
 	},
 	{
-		.command = "relocs",
-		.help = "relocs <rom> <fragnum>\n"
-			"\t\tdump relocations of a fragment",
-		.handler = cmd_relocs,
+		.command = "depends",
+		.help = "depends <rom> <fragnum>\n"
+			"\t\tshow what fragments this one depends on",
+		.handler = cmd_depends,
 	},
 	{
 		.command = "extract",
@@ -67,7 +67,7 @@ struct cmd_s {
 	{
 		.command = "decompile",
 		.help = "decompile <rom> <fragnum>\n"
-			"\t\tcreates .c file. requires avast's retdec\n",
+			"\t\tcreates .c file. requires avast's retdec",
 		.handler = cmd_decompile,
 	},
 #endif
@@ -104,74 +104,6 @@ void print_usage()
 		cmds_index++;
 	}
 	fprintf(stderr, "\nReport bugs to " URL_STRING "\n");
-}
-
-void parse_relocs(uint8_t *fragbytes)
-{
-	struct fragment_s frag;
-	memcpy(&frag, fragbytes, sizeof(struct fragment_s));
-	uint32_t *words = (uint32_t *)fragbytes;
-	uint32_t *reloc_words = words;
-	reloc_words += htonl(frag.offset_relocs) / sizeof(uint32_t);
-	uint32_t num_relocs = htonl(reloc_words[0]);
-	reloc_words++;
-	printf("%d relocations\n", num_relocs);
-	for(int i = 0; i<num_relocs; i++) {
-		uint32_t reloc = htonl(reloc_words[i]);
-		bool foreign = reloc & 0x80000000;
-		uint32_t type = reloc & 0x7F000000;
-		uint32_t addr = reloc & 0x00FFFFFF;
-		uint32_t target = htonl(words[addr>>2]);
-		uint32_t loc = -1;
-		int loc_fragnum = -2;
-
-		char *zType = NULL;
-
-		switch (type) {
-		case 0x02000000:
-			zType = "ptr";
-			loc = target;
-			break;
-		case 0x04000000:
-			zType = "j";
-			loc = (target & 0x03FFFFFF) << 2;
-			loc |= 0x80000000;
-			break;
-		case 0x05000000:
-			zType = "lui";
-			loc = (target & 0x0000FFFF) << 16;
-			loc |= 0x80000000;
-			break;
-		case 0x06000000:
-			zType = "addiu";
-			loc = (target & 0x0000FFFF);
-			if (!foreign)
-				loc += get_vma(&frag);
-			break;
-		default:
-			zType = "unknown";
-			loc = -1;
-			break;
-		}
-
-		switch ((loc & 0x0FF00000)>>20) {
-		case 0:
-			loc_fragnum = -1; break;
-		case 1 ... 15:
-			loc_fragnum = -999; break;
-		default:
-			loc_fragnum = ((loc & 0x0FF00000)>>20)-16;
-			break;
-		}
-		printf("%5d %08x %8x %08x\t%s\t%d\n",
-			i,
-			reloc,
-			addr,
-			loc,
-			zType,
-			loc_fragnum
-		);
-	}
 }
 
 int dump_frags()
@@ -432,12 +364,14 @@ out_return:
 
 }
 
-char *cmd_relocs(int argc, char **argv)
+char *cmd_depends(int argc, char **argv)
 {
-	__label__ out_return;
+	__label__ out_return, out_dbclose, out_unmap, out_droptable;
 	struct MappedFile_s m;
 	char *msg = NULL;
 	int rc;
+	int fragnum;
+	char pcode[6];
 
 	switch (argc) {
 	case 0 ... 2:
@@ -469,19 +403,186 @@ char *cmd_relocs(int argc, char **argv)
 		goto out_unmap;
 	}
 
+	get_pcode(pcode, m.data);
+
 	rc = DB_FragSearch(db, m.data, m.size);
 	if (rc != SQLITE_OK) {
 		msg = "DB_FragSearch oopsed";
 		goto out_unmap;
 	}
 
-	int fragaddr = DB_GetAddrForNum(db, atoi(argv[3]));
+	fragnum = atoi(argv[3]);
+	int fragaddr = DB_GetAddrForNum(db, fragnum);
 	if (fragaddr == -1) {
 		msg = "no fragment by that number";
 		goto out_unmap;
 	}
-	parse_relocs(m.data + fragaddr);
+	//parse_relocs(m.data + fragaddr);
+	uint32_t *fragbytes = m.data + fragaddr;
 
+	// start
+
+	rc = sqlite3_exec(
+		db,
+		"create temp table relocs(reloc_id integer primary key, pcode, fragnum, far, type, addr, target_addr, target_frag);",
+		NULL, NULL, NULL
+	);
+	if (rc != SQLITE_OK) {
+		msg = "create temp table failed";
+		goto out_unmap;
+	};
+
+	sqlite3_stmt *stmt = NULL;
+	rc = sqlite3_prepare_v2(
+		db,
+		"insert into temp.relocs(pcode, fragnum, far, type, addr, target_addr, target_frag) values (?, ?, ?, ?, ?, ?, ?);",
+		-1,
+		&stmt,
+		NULL
+	);
+	if (rc != SQLITE_OK) {
+		msg = "prepare";
+		goto out_droptable;
+	}
+
+	rc = DB_Begin(db);
+	if (rc != SQLITE_OK) {
+		msg = "begin transaction";
+		goto out_droptable;
+	}
+	struct fragment_s frag;
+	memcpy(&frag, fragbytes, sizeof(struct fragment_s));
+	uint32_t *words = (uint32_t *)fragbytes;
+	uint32_t *reloc_words = words;
+	reloc_words += htonl(frag.offset_relocs) / sizeof(uint32_t);
+	uint32_t num_relocs = htonl(reloc_words[0]);
+	reloc_words++;
+	printf("%d relocations.\n", num_relocs);
+	for(int i = 0; i<num_relocs; i++) {
+		uint32_t reloc = htonl(reloc_words[i]);
+		bool foreign = reloc & 0x80000000;
+		uint32_t type = reloc & 0x7F000000;
+		uint32_t addr = reloc & 0x00FFFFFF;
+		uint32_t target = htonl(words[addr>>2]);
+		uint32_t loc = -1;
+		uint32_t n;
+		int loc_fragnum = -2;
+
+		char *zType = NULL;
+
+		switch (type) {
+		case 0x02000000:
+			zType = "ptr";
+			loc = target;
+			break;
+		case 0x04000000:
+			zType = "j";
+			loc = (target & 0x03FFFFFF) << 2;
+			loc |= 0x80000000;
+			break;
+		case 0x05000000:
+			zType = "lui";
+			loc = (target & 0x0000FFFF) << 16;
+			loc |= 0x80000000;
+			break;
+		case 0x06000000:
+			zType = "addiu";
+			loc = (target & 0x0000FFFF);
+			if (!foreign)
+				loc += get_vma(&frag);
+			break;
+		default:
+			zType = "unknown";
+			loc = -1;
+			break;
+		}
+
+		n = (loc & 0x0FF00000)>>20;
+		loc_fragnum = n - 16;
+// 		printf("%5d %08x %8x %08x\t%s\t%d\n",
+// 			i,
+// 			reloc,
+// 			addr,
+// 			loc,
+// 			zType,
+// 			loc_fragnum
+// 		);
+		if (loc_fragnum < 0) continue;
+// "insert into temp.relocs(pcode, fragnum, far, type, addr, target_addr, target_frag) values (?, ?, ?, ?, ?, ?, ?);"
+		rc = sqlite3_bind_text(stmt, 1, pcode, -1, SQLITE_TRANSIENT);
+		if (rc != SQLITE_OK) {msg = "bind 1";}
+		rc = sqlite3_bind_int64(stmt, 2, fragnum);
+		if (rc != SQLITE_OK) {msg = "bind 2";}
+		rc = sqlite3_bind_int64(stmt, 3, foreign);
+		if (rc != SQLITE_OK) {msg = "bind 3";}
+		rc = sqlite3_bind_text(stmt, 4, zType, -1, SQLITE_STATIC);
+		if (rc != SQLITE_OK) {msg = "bind 4";}
+		rc = sqlite3_bind_int64(stmt, 5, addr);
+		if (rc != SQLITE_OK) {msg = "bind 5";}
+		rc = sqlite3_bind_int64(stmt, 6, loc);
+		if (rc != SQLITE_OK) {msg = "bind 6";}
+		rc = sqlite3_bind_int64(stmt, 7, loc_fragnum);
+		if (rc != SQLITE_OK) {msg = "bind 7";}
+
+		rc = sqlite3_step(stmt);
+		if (rc != SQLITE_DONE) {msg = "step";}
+
+		rc = sqlite3_reset(stmt);
+		if (rc != SQLITE_OK) {msg = "reset";}
+	}
+
+	DB_End(db);
+
+	rc = sqlite3_finalize(stmt);
+	if (rc != SQLITE_OK) {msg = "finalize1"; goto out_droptable;}
+
+	rc = sqlite3_prepare(
+		db,
+		"select distinct target_frag from temp.relocs where target_frag != fragnum order by target_frag;",
+		-1,
+		&stmt,
+		NULL
+	);
+	if (rc != SQLITE_OK) { msg = "prepare2"; goto out_droptable;}
+
+	bool did_print_first = false;
+	while (SQLITE_DONE != (rc=sqlite3_step(stmt))) switch (rc) {
+	case SQLITE_BUSY:
+		break;
+	case SQLITE_ERROR:
+		msg = "sqlite3_step returned SQLITE_ERROR";
+		goto out_finalize;
+		break;
+	case SQLITE_MISUSE:
+		msg = "sqlite3_step returned SQLITE_MISUSE";
+		goto out_finalize;
+		break;
+	default:
+		msg = "sqlite3_step returned some other error";
+		goto out_finalize;
+		break;
+	case SQLITE_ROW:
+		printf("%s%d", did_print_first?", ":"Depends on ",sqlite3_column_int(stmt, 0));
+		did_print_first = true;
+		break;
+	}
+
+	if (did_print_first) {
+		printf(".\n");
+	} else {
+		printf("No dependencies.\n");
+	}
+
+out_finalize:
+	rc = sqlite3_finalize(stmt);
+	if (!msg)
+		if (rc != SQLITE_OK) {msg = "finalize2"; goto out_droptable;}
+out_droptable:
+	rc = sqlite3_exec(
+		db,
+		"drop table temp.relocs;",
+		NULL, NULL, NULL
+	);
 out_unmap:
 	MappedFile_Close(m);
 out_dbclose:
@@ -577,7 +678,7 @@ char *_cmd_extract_aux(int argc, char **argv, bool all)
 		msg = "no fragment by that number";
 		goto out_finalize;
 	}
-	
+
 	while (SQLITE_DONE != (rc=sqlite3_step(stmt))) switch (rc) {
 	case SQLITE_BUSY:
 		break;
@@ -614,7 +715,7 @@ char *_cmd_extract_aux(int argc, char **argv, bool all)
 		break;
 	}
 
-	
+
 out_finalize:
 	sqlite3_finalize(stmt);
 out_unmap:
