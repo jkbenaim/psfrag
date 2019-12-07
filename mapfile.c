@@ -9,7 +9,7 @@ struct MappedFile_s MappedFile_Create(char *filename, size_t size)
 	__label__ out_error, out_ok;
 	LPVOID p;
 	BOOL rc;
-	LARGE_INTEGER liSize;
+	long unsigned int luisize;
 	struct MappedFile_s m;
 	DWORD dw;
 	char *lpMsgBuf;
@@ -28,11 +28,11 @@ struct MappedFile_s MappedFile_Create(char *filename, size_t size)
 		goto out_error;
 	}
 
-	liSize.QuadPart = size;
+	luisize = size;
 	m.size = size;
-	rc = SetFilePointerEx(
+	rc = SetFilePointer(
 		m._hFile,
-		liSize,
+		luisize,
 		NULL,
 		FILE_BEGIN
 	);
@@ -49,8 +49,8 @@ struct MappedFile_s MappedFile_Create(char *filename, size_t size)
 		m._hFile,
 		NULL,
 		PAGE_READWRITE,
-		liSize.HighPart,
-		liSize.LowPart,
+		0,
+		luisize,
 		NULL
 	);
 
@@ -98,7 +98,6 @@ struct MappedFile_s MappedFile_Open(char *filename, bool writable)
 	__label__ out_error, out_ok;
 	LPVOID p;
 	BOOL rc;
-	LARGE_INTEGER liSize;
 	struct MappedFile_s m;
 
 	m._hFile = CreateFile(
@@ -115,11 +114,11 @@ struct MappedFile_s MappedFile_Open(char *filename, bool writable)
 		goto out_error;
 	}
 
-	rc = GetFileSizeEx(m._hFile, &liSize);
-	if (rc == 0) {
+	rc = GetFileSize(m._hFile, NULL);
+	if (rc == -1) {
 		goto out_error;
 	}
-	m.size = (uint64_t) liSize.QuadPart;
+	m.size = (uint64_t) rc;
 
 	m._hMapping = CreateFileMapping(
 		m._hFile,
